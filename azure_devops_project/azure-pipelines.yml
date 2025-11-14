@@ -1,0 +1,130 @@
+# Azure DevOps Multi-Environment Pipeline
+# Supports selective deployment to Dev, Stage, or both
+
+trigger:
+  branches:
+    include:
+      - master
+      - feature/*
+  paths:
+    include:
+      - azure-pipelines.yml
+      - azure_devops_project/*
+
+# =========================
+# Choose Environment at Run Time
+# =========================
+parameters:
+  - name: environment
+    displayName: "Select Environment to Deploy"
+    type: string
+    default: 'dev'
+    values:
+      - dev
+      - stage
+      - all
+
+# =========================
+# 1️⃣ Validate Stage
+# =========================
+stages:
+- stage: validate
+  displayName: "Validate Terraform Files"
+  jobs:
+  - job: tf_validate
+    pool:
+      name: 'SelfHosted'
+    steps:
+      - task: TerraformInstaller@1
+        inputs:
+          terraformVersion: 'latest'
+
+      - task: TerraformTask@5
+        inputs:
+          provider: 'azurerm'
+          command: 'init'
+          workingDirectory: '$(System.DefaultWorkingDirectory)/dev'
+          backendAzureRmUseEntraIdForAuthentication: false
+          backendServiceArm: 'Azure subscription 1(7e1882db-f3bd-43ad-8e09-9aadc9c0e01a)'
+          backendAzureRmResourceGroupName: 'terraform-state-rg'
+          backendAzureRmStorageAccountName: 'tfdevbackenddevops123'
+          backendAzureRmContainerName: 'tfstate'
+          backendAzureRmKey: 'dev.terraform.tfstate'
+
+      - task: TerraformTask@5
+        inputs:
+          provider: 'azurerm'
+          command: 'validate'
+          workingDirectory: '$(System.DefaultWorkingDirectory)/dev'
+
+# =========================
+# 2️⃣ Dev Deploy Stage
+# =========================
+- stage: Dev_Deploy
+  displayName: "Deploy to Dev Environment"
+  dependsOn: validate
+  condition: or(eq('${{ parameters.environment }}', 'dev'), eq('${{ parameters.environment }}', 'all'))
+  jobs:
+  - job: terraform_apply_dev
+    pool:
+      name: 'SelfHosted'
+    steps:
+      - task: TerraformInstaller@1
+        inputs:
+          terraformVersion: 'latest'
+
+      - task: TerraformTask@5
+        inputs:
+          provider: 'azurerm'
+          command: 'init'
+          workingDirectory: '$(System.DefaultWorkingDirectory)/dev'
+          backendAzureRmUseEntraIdForAuthentication: false
+          backendServiceArm: 'Azure subscription 1(7e1882db-f3bd-43ad-8e09-9aadc9c0e01a)'
+          backendAzureRmResourceGroupName: 'terraform-state-rg'
+          backendAzureRmStorageAccountName: 'tfdevbackenddevops123'
+          backendAzureRmContainerName: 'tfstate'
+          backendAzureRmKey: 'dev.terraform.tfstate'
+
+      - task: TerraformTask@5
+        inputs:
+          provider: 'azurerm'
+          command: 'apply'
+          workingDirectory: '$(System.DefaultWorkingDirectory)/dev'
+          commandOptions: '--auto-approve'
+          environmentServiceNameAzureRM: 'Azure subscription 1(7e1882db-f3bd-43ad-8e09-9aadc9c0e01a)'
+
+# =========================
+# 3️⃣ Stage Deploy Stage
+# =========================
+- stage: Stage_Deploy
+  displayName: "Deploy to Stage Environment"
+  dependsOn: validate
+  condition: or(eq('${{ parameters.environment }}', 'stage'), eq('${{ parameters.environment }}', 'all'))
+  jobs:
+  - job: terraform_apply_stage
+    pool:
+      name: 'SelfHosted'
+    steps:
+      - task: TerraformInstaller@1
+        inputs:
+          terraformVersion: 'latest'
+
+      - task: TerraformTask@5
+        inputs:
+          provider: 'azurerm'
+          command: 'init'
+          workingDirectory: '$(System.DefaultWorkingDirectory)/staging'
+          backendAzureRmUseEntraIdForAuthentication: false
+          backendServiceArm: 'Azure subscription 1(7e1882db-f3bd-43ad-8e09-9aadc9c0e01a)'
+          backendAzureRmResourceGroupName: 'terraform-state-rg'
+          backendAzureRmStorageAccountName: 'tfstagebackenddevops123'
+          backendAzureRmContainerName: 'tfstate'
+          backendAzureRmKey: 'stage.terraform.tfstate'
+
+      - task: TerraformTask@5
+        inputs:
+          provider: 'azurerm'
+          command: 'apply'
+          workingDirectory: '$(System.DefaultWorkingDirectory)/staging'
+          commandOptions: '--auto-approve'
+          environmentServiceNameAzureRM: 'Azure subscription 1(7e1882db-f3bd-43ad-8e09-9aadc9c0e01a)'

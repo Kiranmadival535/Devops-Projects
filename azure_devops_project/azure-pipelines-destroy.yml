@@ -1,0 +1,69 @@
+trigger: none   # Manual trigger only — prevents accidental destroy
+
+parameters:
+  - name: environment
+    displayName: "Select Environment to Destroy"
+    type: string
+    default: "dev"
+    values:
+      - dev
+      - staging
+
+pool:
+  name: 'SelfHosted'
+
+variables:
+  terraform_version: 'latest'
+  backend_rg: 'terraform-state-rg'
+  subscription: 'Azure subscription 1(7e1882db-f3bd-43ad-8e09-9aadc9c0e01a)'
+
+stages:
+- stage: Destroy
+  displayName: "Terraform Destroy - ${{ parameters.environment }}"
+  jobs:
+  - job: terraform_destroy
+    displayName: "Destroy ${{ parameters.environment }} Infrastructure"
+    steps:
+    - task: TerraformInstaller@1
+      inputs:
+        terraformVersion: $(terraform_version)
+
+    - ${{ if eq(parameters.environment, 'dev') }}:
+      - task: TerraformTask@5
+        inputs:
+          provider: 'azurerm'
+          command: 'init'
+          workingDirectory: '$(System.DefaultWorkingDirectory)/dev'
+          backendServiceArm: $(subscription)
+          backendAzureRmResourceGroupName: $(backend_rg)
+          backendAzureRmStorageAccountName: 'tfdevbackenddevops123'
+          backendAzureRmContainerName: 'tfstate'
+          backendAzureRmKey: 'dev.terraform.tfstate'
+
+      - task: TerraformTask@5
+        inputs:
+          provider: 'azurerm'
+          command: 'destroy'
+          workingDirectory: '$(System.DefaultWorkingDirectory)/dev'
+          commandOptions: '--auto-approve'
+          environmentServiceNameAzureRM: $(subscription)
+
+    - ${{ if eq(parameters.environment, 'staging') }}:
+      - task: TerraformTask@5
+        inputs:
+          provider: 'azurerm'
+          command: 'init'
+          workingDirectory: '$(System.DefaultWorkingDirectory)/staging'
+          backendServiceArm: $(subscription)
+          backendAzureRmResourceGroupName: $(backend_rg)
+          backendAzureRmStorageAccountName: 'tfstagebackenddevops123'
+          backendAzureRmContainerName: 'tfstate'
+          backendAzureRmKey: 'stage.terraform.tfstate'
+
+      - task: TerraformTask@5
+        inputs:
+          provider: 'azurerm'
+          command: 'destroy'
+          workingDirectory: '$(System.DefaultWorkingDirectory)/staging'
+          commandOptions: '--auto-approve'
+          environmentServiceNameAzureRM: $(subscription)

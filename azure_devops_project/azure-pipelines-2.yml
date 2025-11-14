@@ -1,0 +1,45 @@
+trigger: none   # run manually for now
+
+stages:
+- stage: Deploy_AKS
+  displayName: "Deploy to AKS"
+  jobs:
+  - job: Deploy
+    pool:
+      name: 'SelfHosted'
+    steps:
+      - checkout: self
+      - task: FileTransform@2
+        displayName: "Replace $(env) in K8s manifests"
+        inputs:
+          folderPath: '$(System.DefaultWorkingDirectory)/k8s'
+          fileType: 'yaml'
+          targetFiles: '**/*.yml'
+
+
+      # 1️⃣ Authenticate to Azure & get kubeconfig for AKS
+      - task: KubernetesManifest@1
+        inputs:
+          action: 'deploy'
+          connectionType: 'azureResourceManager'
+          azureSubscriptionConnection: 'Azure subscription 1(7e1882db-f3bd-43ad-8e09-9aadc9c0e01a)'
+          azureResourceGroup: 'dev-rg'
+          kubernetesCluster: 'dev-cluster'
+          manifests: '$(System.DefaultWorkingDirectory)/k8s/*.yml'
+      - task: AzureCLI@2
+        displayName: "Get AKS Credentials"
+        inputs:
+          azureSubscription: 'Azure subscription 1(7e1882db-f3bd-43ad-8e09-9aadc9c0e01a)'
+          scriptType: 'powershell'       # ✅ instead of 'pscore'
+          scriptLocation: 'inlineScript'
+          inlineScript: |
+           Write-Host "Fetching AKS credentials..."
+           az aks get-credentials --resource-group dev-rg --name dev-cluster --overwrite-existing
+           Write-Host "Testing AKS connection..."
+           kubectl get nodes
+
+      # 3️⃣ Verify Deployment (optional)
+      - script: |
+          kubectl get pods -o wide
+          kubectl get svc
+        displayName: "Verify Deployment"
