@@ -1,0 +1,84 @@
+trigger:
+  paths:
+    include:
+      - result/*
+
+resources:
+- repo: self
+
+variables:
+  dockerRegistryServiceConnection: '1a2881f1-1c6b-43f3-aa31-25a92006b7e1'
+  imageRepository: 'resultapp'
+  containerRegistry: 'kiranazurecicd.azurecr.io'
+  dockerfilePath: '$(Build.SourcesDirectory)/result/Dockerfile'
+  tag: '$(Build.BuildId)'
+
+stages:
+# ==================================================
+- stage: Build
+  displayName: Build stage
+  jobs:
+  - job: Build
+    displayName: Build
+    pool:
+       name: azureagent
+    steps:
+    - task: Docker@2
+      displayName: Build image
+      inputs:
+        containerRegistry: '$(dockerRegistryServiceConnection)'
+        repository: '$(imageRepository)'
+        command: 'build'
+        Dockerfile: '$(dockerfilePath)'
+        tags: '$(tag)'
+
+# ==================================================
+- stage: Push
+  displayName: Push stage
+  dependsOn: Build
+  jobs:
+  - job: Push
+    displayName: Push image
+    pool:
+      name: azureagent
+    steps:
+    - task: Docker@2
+      displayName: Push image
+      inputs:
+        containerRegistry: '$(dockerRegistryServiceConnection)'
+        repository: '$(imageRepository)'
+        command: 'push'
+        tags: '$(tag)'
+
+# ==================================================
+- stage: Update
+  displayName: Update Kubernetes Manifests
+  dependsOn: Push
+  jobs:
+  - job: Update
+    displayName: Update manifests in repo
+    pool:
+      name: azureagent
+    steps:
+    - script: |
+        # Clean any old temp folder
+        [ -d /tmp/temp_repo ] && rm -rf /tmp/temp_repo
+
+        REPO_URL="https://6UPutL3NmgguZAlvWz0J1sUSTHLcN3I2vXQ7Bf9IC7SlIr3KWXHVJQQJ99BKACAAAAAAAAAAAAASAZDO4Jmm@dev.azure.com/practice-devops-projects/devops-voting-app-project/_git/devops-voting-app-project"
+
+        git clone "$REPO_URL" /tmp/temp_repo
+        cd /tmp/temp_repo
+
+        git config user.email "buildpipeline@azuredevops.local"
+        git config user.name "Azure DevOps Pipeline"
+
+        # Update image tag in result deployment YAML
+        sed -i "s|image:.*|image: $(containerRegistry)/$(imageRepository):$(tag)|g" k8s-specifications/result-deployment.yaml
+
+        git add .
+        git commit -m "Update result deployment to image tag $(tag)"
+        git push
+
+        cd /
+        rm -rf /tmp/temp_repo
+      displayName: "Update K8s Manifest (Inline)"

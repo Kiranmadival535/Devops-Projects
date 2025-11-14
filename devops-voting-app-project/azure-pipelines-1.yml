@@ -1,0 +1,48 @@
+trigger:
+- main
+
+resources:
+- repo: self
+
+variables:
+  dockerRegistryServiceConnection: '58fe41b2-89f8-4746-8bbe-57114b57f128'  # or 'azurecicd' if that's the name
+  imageRepository: 'resultapp'
+  containerRegistry: 'kiranazurecicd.azurecr.io'
+  dockerfilePath: '$(Build.SourcesDirectory)/result/Dockerfile'
+  tag: '$(Build.BuildId)'
+  
+
+stages:
+- stage: Build
+  displayName: Build Image
+  jobs:
+  - job: Build
+    displayName: Build
+    pool:
+      name: azureagent
+    steps:
+    - task: Docker@2
+      displayName: Build and Push Docker image to ACR
+      inputs:
+        containerRegistry: '$(dockerRegistryServiceConnection)'
+        repository: '$(imageRepository)'
+        command: 'build'
+        Dockerfile: 'result/Dockerfile'
+        tags: '$(tag)'
+
+
+  - job: Push
+    displayName: Push image
+    pool:
+      name: azureagent
+    steps:
+    - task: Docker@2
+      displayName: Build and Push Docker image to ACR
+      inputs:
+        containerRegistry: '$(dockerRegistryServiceConnection)'
+        repository: '$(imageRepository)'
+        command: 'push'
+        tags: '$(tag)'
+
+    - script: echo "✅ Image pushed successfully to $(containerRegistry)/$(imageRepository):$(tag)"
+      displayName: Show pushed image

@@ -1,0 +1,85 @@
+trigger:
+  paths:
+    include:
+      - worker/*
+
+resources:
+- repo: self
+
+variables:
+  dockerRegistryServiceConnection: 'ed0f0818-01e2-45bc-81e5-5b321ca30ce2'
+  imageRepository: 'workerapp'
+  containerRegistry: 'kiranazurecicd.azurecr.io'
+  dockerfilePath: '$(Build.SourcesDirectory)/worker/Dockerfile'
+  tag: '$(Build.BuildId)'
+
+stages:
+# ==================================================
+- stage: Build
+  displayName: Build stage
+  jobs:
+  - job: Build
+    displayName: Build Image
+    pool:
+      name: azureagent
+    steps:
+    - task: Docker@2
+      displayName: Build Docker Image
+      inputs:
+        containerRegistry: '$(dockerRegistryServiceConnection)'
+        repository: '$(imageRepository)'
+        command: 'build'
+        Dockerfile: '$(dockerfilePath)'
+        tags: '$(tag)'
+
+# ==================================================
+- stage: Push
+  displayName: Push stage
+  dependsOn: Build
+  jobs:
+  - job: Push
+    displayName: Push Image
+    pool:
+      name: azureagent
+    steps:
+    - task: Docker@2
+      displayName: Push Docker Image
+      inputs:
+        containerRegistry: '$(dockerRegistryServiceConnection)'
+        repository: '$(imageRepository)'
+        command: 'push'
+        tags: '$(tag)'
+
+# ==================================================
+- stage: Update
+  displayName: Update Kubernetes Manifests
+  dependsOn: Push
+  jobs:
+  - job: Update
+    displayName: Update K8s Manifest
+    pool:
+      name: azureagent
+    steps:
+    - script: |
+        # Clean any old temp folder
+        [ -d /tmp/temp_repo ] && rm -rf /tmp/temp_repo
+
+        # Clone your Azure DevOps repo using PAT (for demo/testing)
+        REPO_URL="https://6UPutL3NmgguZAlvWz0J1sUSTHLcN3I2vXQ7Bf9IC7SlIr3KWXHVJQQJ99BKACAAAAAAAAAAAAASAZDO4Jmm@dev.azure.com/practice-devops-projects/devops-voting-app-project/_git/devops-voting-app-project"
+
+        git clone "$REPO_URL" /tmp/temp_repo
+        cd /tmp/temp_repo
+
+        git config user.email "buildpipeline@azuredevops.local"
+        git config user.name "Azure DevOps Pipeline"
+
+        # Update image in worker deployment YAML
+        sed -i "s|image:.*|image: $(containerRegistry)/$(imageRepository):$(tag)|g" k8s-specifications/worker-deployment.yaml
+
+        git add .
+        git commit -m "Update worker deployment to image tag $(tag)"
+        git push
+
+        cd /
+        rm -rf /tmp/temp_repo
+      displayName: "Update K8s Manifest (Inline)"

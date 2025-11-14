@@ -1,0 +1,99 @@
+trigger:
+  paths:
+    include:
+      - vote/*
+
+resources:
+- repo: self
+
+variables:
+  dockerRegistryServiceConnection: '7f1b178e-f463-4b01-a8e6-2fbd61111933'
+  imageRepository: 'votingapp'
+  containerRegistry: 'kiranazurecicd.azurecr.io'
+  dockerfilePath: '$(Build.SourcesDirectory)/vote/Dockerfile'
+  tag: '$(Build.BuildId)'
+  imageFullPath: '$(containerRegistry)/$(imageRepository)'
+
+stages:
+# ==================================================
+- stage: Build
+  displayName: Build stage
+  jobs:
+  - job: Build
+    pool:
+      name: azureagent
+    steps:
+      - task: Docker@2
+        displayName: Build image
+        inputs:
+          containerRegistry: '$(dockerRegistryServiceConnection)'
+          repository: '$(imageRepository)'
+          command: 'build'
+          Dockerfile: 'vote/Dockerfile'
+          tags: '$(tag)'
+
+# ==================================================
+- stage: Push
+  displayName: Push stage
+  jobs:
+  - job: Push
+    pool:
+      name: azureagent
+    steps:
+      - task: Docker@2
+        displayName: Push image
+        inputs:
+          containerRegistry: '$(dockerRegistryServiceConnection)'
+          repository: '$(imageRepository)'
+          command: 'push'
+          tags: '$(tag)'
+
+# ==================================================
+- stage: Update
+  displayName: Update Kubernetes Manifests
+  dependsOn: Push
+  jobs:
+  - job: Update
+    pool:
+      name: azureagent
+    steps:
+      - checkout: self
+
+      - script: |
+          set -xe
+          
+          SERVICE="vote"
+          IMAGE="votingapp"
+          TAG="$(Build.BuildId)"
+          REPO_URL="https://6UPutL3NmgguZAlvWz0J1sUSTHLcN3I2vXQ7Bf9IC7SlIr3KWXHVJQQJ99BKACAAAAAAAAAAAAASAZDO4Jmm@dev.azure.com/practice-devops-projects/devops-voting-app-project/_git/devops-voting-app-project"
+
+          # Clean old temp directory
+          if [ -d /tmp/temp_repo ]; then
+            echo "Cleaning old temp repo..."
+            rm -rf /tmp/temp_repo
+          fi
+
+          git clone "$REPO_URL" /tmp/temp_repo
+          cd /tmp/temp_repo
+
+          git config user.email "ci-bot@example.com"
+          git config user.name "CI Bot"
+
+          FILE="k8s-specifications/${SERVICE}-deployment.yaml"
+          if [[ ! -f "$FILE" ]]; then
+            echo "File not found: $FILE"
+            ls -R k8s-specifications
+            exit 1
+          fi
+
+          echo "Updating image in $FILE"
+          sed -i "s|image:.*|image: kiranazurecicd.azurecr.io/${IMAGE}:${TAG}|g" "$FILE"
+
+          git add "$FILE"
+          git commit -m "Update Kubernetes manifest to tag: ${TAG}"
+          git push
+
+          cd /
+          rm -rf /tmp/temp_repo
+        displayName: "Update K8s Manifest (Inline)"
+
