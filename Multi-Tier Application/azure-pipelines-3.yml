@@ -1,0 +1,205 @@
+trigger:
+- none
+
+pool:
+  vmImage: ubuntu-latest
+
+stages:
+
+# ---------------------------------------------------
+# 1. MAVEN COMPILE
+# ---------------------------------------------------
+- stage: compile
+  displayName: 'Maven Compile'
+  jobs:
+    - job: maven_compile
+      steps:
+        - task: MavenAuthenticate@0
+          inputs:
+            artifactsFeeds: 'maven'
+
+        - task: Maven@4
+          inputs:
+            azureSubscription: 'Azure subscription 1(7e1882db-f3bd-43ad-8e09-9aadc9c0e01a)'
+            mavenPomFile: 'pom.xml'
+            goals: 'compile'
+            publishJUnitResults: true
+            testResultsFiles: '**/surefire-reports/TEST-*.xml'
+            javaHomeOption: 'JDKVersion'
+            mavenVersionOption: 'Default'
+
+# ---------------------------------------------------
+# 2. MAVEN TEST
+# ---------------------------------------------------
+- stage: test
+  displayName: 'Maven Test'
+  jobs:
+    - job: maven_test
+      steps:
+        - task: MavenAuthenticate@0
+          inputs:
+            artifactsFeeds: 'maven'
+
+        - task: Maven@4
+          inputs:
+            azureSubscription: 'Azure subscription 1(7e1882db-f3bd-43ad-8e09-9aadc9c0e01a)'
+            mavenPomFile: 'pom.xml'
+            goals: 'test'
+            publishJUnitResults: true
+            testResultsFiles: '**/surefire-reports/TEST-*.xml'
+            javaHomeOption: 'JDKVersion'
+            mavenVersionOption: 'Default'
+
+# ---------------------------------------------------
+# 3. TRIVY FS SCAN
+# ---------------------------------------------------
+- stage: trivy_fs_scan
+  displayName: 'Trivy FS Scan'
+  jobs:
+    - job: trivy_fs_scan
+      steps:
+        - script: |
+            sudo apt-get update
+            sudo apt-get install -y wget apt-transport-https gnupg lsb-release
+            wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+            echo deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main | sudo tee /etc/apt/sources.list.d/trivy.list
+            sudo apt-get update
+            sudo apt-get install -y trivy
+          displayName: "Install Trivy"
+
+        - script: |
+            trivy fs --format table -o fs.html .
+          displayName: "Run Trivy FS scan"
+
+        - task: PublishPipelineArtifact@1
+          inputs:
+            targetPath: fs.html
+            artifact: trivy-fs-report
+            publishLocation: 'pipeline'
+
+# ---------------------------------------------------
+# 4. SONARQUBE
+# ---------------------------------------------------
+- stage: sonarqube
+  displayName: 'SonarQube Analysis'
+  jobs:
+    - job: sonarqube
+      steps:
+        - task: SonarQubePrepare@7
+          inputs:
+            SonarQube: 'sonarqube'
+            scannerMode: 'cli'
+            configMode: 'manual'
+            cliProjectKey: 'bankapp'
+            cliProjectName: 'bankapp'
+            cliSources: '.'
+            extraProperties: 'sonar.java.binaries=.'
+
+        - task: SonarQubeAnalyze@7
+          inputs:
+            jdkversion: 'JAVA_HOME_17_X64'
+
+# ---------------------------------------------------
+# 5. PUBLISH ARTIFACTS
+# ---------------------------------------------------
+- stage: publish_artifacts
+  displayName: 'Publish Build Artifacts'
+  jobs:
+    - job: deploy_artifacts
+      steps:
+        - task: MavenAuthenticate@0
+          inputs:
+            artifactsFeeds: 'maven'
+
+        - task: Maven@4
+          inputs:
+            azureSubscription: 'Azure subscription 1(7e1882db-f3bd-43ad-8e09-9aadc9c0e01a)'
+            mavenPomFile: 'pom.xml'
+            goals: 'deploy'
+            javaHomeOption: 'JDKVersion'
+            mavenVersionOption: 'Default'
+
+# ---------------------------------------------------
+# 6. DOCKER BUILD + PUSH
+# ---------------------------------------------------
+- stage: docker_build_and_push
+  displayName: 'Docker Build & Push'
+  jobs:
+    - job: docker_build_and_push
+      steps:
+
+        - task: CmdLine@2
+          inputs:
+            script: 'mvn package'
+
+        - task: Docker@2
+          displayName: 'Build Docker Image'
+          inputs:
+            containerRegistry: 'docker-svc'
+            repository: 'dev'
+            command: 'build'
+            Dockerfile: '**/Dockerfile'
+            tags: 'latest'
+
+        - task: Docker@2
+          displayName: 'Push Docker Image'
+          inputs:
+            containerRegistry: 'docker-svc'
+            repository: 'dev'
+            command: 'push'
+            tags: 'latest'
+
+# ---------------------------------------------------
+# 7. TRIVY IMAGE SCAN (ACR LOGIN ADDED ✔)
+# ---------------------------------------------------
+- stage: trivy_image_scan
+  displayName: 'Trivy Image Scan'
+  dependsOn: docker_build_and_push
+  jobs:
+    - job: trivy_image_scan
+      steps:
+
+        - task: Docker@2
+          displayName: 'ACR Login'
+          inputs:
+            command: login
+            containerRegistry: 'docker-svc'
+
+        - script: |
+            sudo apt-get update
+            sudo apt-get install -y wget apt-transport-https gnupg lsb-release
+            wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+            echo deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main | sudo tee /etc/apt/sources.list.d/trivy.list
+            sudo apt-get update
+            sudo apt-get install -y trivy
+          displayName: "Install Trivy"
+
+        - task: CmdLine@2
+          displayName: 'Trivy Scan Docker Image'
+          inputs:
+            script: |
+              trivy image --format table -o image.html multitierproject.azurecr.io/dev:latest
+
+        - task: PublishPipelineArtifact@1
+          inputs:
+            targetPath: image.html
+            artifact: trivy-image-report
+            publishLocation: 'pipeline'
+
+# ---------------------------------------------------
+# 8. DEPLOY TO K8S
+# ---------------------------------------------------
+- stage: deploy_to_k8s
+  displayName: 'Deploy To K8S'
+  dependsOn: trivy_image_scan
+  jobs:
+    - job: deploy_to_k8s
+      steps:
+
+        - task: KubernetesManifest@1
+          inputs:
+            action: 'deploy'
+            connectionType: 'kubernetesServiceConnection'
+            kubernetesServiceConnection: 'k8s-conn'
+            namespace: 'default'
+            manifests: 'ds.yaml'
